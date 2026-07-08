@@ -1,6 +1,5 @@
 // This runs on the server (Vercel), never in the browser.
-// It keeps your GEMINI_API_KEY secret while letting the app
-// send it a photo and get back the extracted DN fields for free.
+// Fixed response structure to match what your frontend layout expects from Claude!
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -18,7 +17,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Send the image and prompt directly to Google's Gemini 1.5 Flash model
     const geminiUrl = `https://googleapis.com{apiKey}`;
 
     const geminiResponse = await fetch(geminiUrl, {
@@ -52,13 +50,12 @@ export default async function handler(req, res) {
       return res.status(geminiResponse.status).json({ error: data.error?.message || 'Gemini API request failed.' });
     }
 
-    // Format Gemini's response structure to closely mirror what your frontend expects
     const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     
+    // CRITICAL FIX: Match the exact response layout your frontend requires
     const formattedData = {
       content: [
         {
-          type: 'text',
           text: aiText,
         },
       ],
@@ -70,3 +67,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server error while contacting Gemini API.' });
   }
 }
+
