@@ -1,5 +1,6 @@
 // This runs on the server (Vercel), never in the browser.
-// Forces Gemini to output pure JSON fields that perfectly fill your frontend boxes!
+// Uses native Node.js HTTPS to run fully inside Google's free tier.
+// Emulates Claude's layout structure to automatically fill out input boxes.
 import https from 'https';
 
 export default async function handler(req, res) {
@@ -12,48 +13,34 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server is missing GEMINI_API_KEY. Set it in your Vercel project settings.' });
   }
 
-  const { base64Image } = req.body || {};
-  if (!base64Image) {
-    return res.status(400).json({ error: 'Missing base64Image in request body.' });
+  const { base64Image, prompt } = req.body || {};
+  if (!base64Image || !prompt) {
+    return res.status(400).json({ error: 'Missing base64Image or prompt in request body.' });
   }
 
   try {
-    // Clean data prefix out of the base64 string
+    // Strip data URI scheme prefix out of base64 data string
     const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
 
-    // STRICT INSTRUCTION PROMPT: Forces Gemini to match your specific frontend JSON state keys
-    const strictGeminiPrompt = `You are a professional OCR assistant. Extract fields from this driver note (Nota Pemandu) image.
-    Return ONLY a raw valid JSON object. Do not include markdown formatting or backticks.
-    Use exactly these lowercase keys for the values:
-    {
-      "dn_no": "string here",
-      "lorry_no": "string here",
-      "date": "string here",
-      "driver": "string here",
-      "ic_no": "string here",
-      "loading_place": "string here",
-      "unloading_place": "string here",
-      "load_bersih": "string here",
-      "unload_bersih": "string here",
-      "remarks": "string here"
-    }`;
+    // Inject strict instruction into the existing frontend Claude prompt to guarantee valid json output
+    const combinedPrompt = `${prompt}\n\nIMPORTANT: Return your response strictly as a raw JSON block object matching the requested fields. Do not warp your response inside markdown backticks or triple tick blocks.`;
 
     const postData = JSON.stringify({
       contents: [
         {
           parts: [
             { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-            { text: strictGeminiPrompt }
+            { text: combinedPrompt }
           ]
         }
       ],
       generationConfig: {
-        responseMimeType: "application/json" // Forces Gemini to speak native JSON language
+        responseMimeType: "application/json" // Hard-forces Gemini to reply in native JSON data structures
       }
     });
 
     const options = {
-      hostname: '://googleapis.com',
+      hostname: 'generativelanguage.googleapis.com',
       path: `/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       method: 'POST',
       headers: {
@@ -79,19 +66,21 @@ export default async function handler(req, res) {
       request.end();
     });
 
-    let aiText = geminiBody.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    let aiText = geminiBody.candidates?.?.content?.parts?.?.text || '{}';
     
-    // Safety clean up of code markers
-    aiText = aiText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    // Clean up residual backticks or markdown strings if any are present
+    if (aiText.includes('```')) {
+      aiText = aiText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    }
 
-    // Package the JSON string to perfectly look like a standard Claude text message frame
+    // CRITICAL: Format the content field to mirror Claude's message shape structure exactly
     const formattedData = {
       content: [
         {
           type: 'text',
-          text: aiText,
-        },
-      ],
+          text: aiText
+        }
+      ]
     };
 
     return res.status(200).json(formattedData);
