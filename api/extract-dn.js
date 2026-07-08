@@ -1,15 +1,15 @@
 // This runs on the server (Vercel), never in the browser.
-// It keeps your ANTHROPIC_API_KEY secret while letting the app
-// send it a photo and get back the extracted DN fields.
+// It keeps your GEMINI_API_KEY secret while letting the app
+// send it a photo and get back the extracted DN fields for free.
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'Server is missing ANTHROPIC_API_KEY. Set it in your Vercel project settings.' });
+    return res.status(500).json({ error: 'Server is missing GEMINI_API_KEY. Set it in your Vercel project settings.' });
   }
 
   const { base64Image, prompt } = req.body || {};
@@ -18,36 +18,55 @@ export default async function handler(req, res) {
   }
 
   try {
-    const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+    // Send the image and prompt directly to Google's Gemini 1.5 Flash model
+    const geminiUrl = `https://googleapis.com{apiKey}`;
+
+    const geminiResponse = await fetch(geminiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64Image } },
-            { type: 'text', text: prompt }
-          ]
-        }]
-      })
+        contents: [
+          {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: 'image/jpeg',
+                  data: base64Image,
+                },
+              },
+              {
+                text: prompt,
+              },
+            ],
+          },
+        ],
+      }),
     });
 
-    const data = await anthropicResponse.json();
+    const data = await geminiResponse.json();
 
-    if (!anthropicResponse.ok) {
-      console.error('Anthropic API error:', data);
-      return res.status(anthropicResponse.status).json({ error: data.error?.message || 'Anthropic API request failed.' });
+    if (!geminiResponse.ok) {
+      console.error('Gemini API error:', data);
+      return res.status(geminiResponse.status).json({ error: data.error?.message || 'Gemini API request failed.' });
     }
 
-    return res.status(200).json(data);
+    // Format Gemini's response structure to closely mirror what your frontend expects
+    const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    const formattedData = {
+      content: [
+        {
+          type: 'text',
+          text: aiText,
+        },
+      ],
+    };
+
+    return res.status(200).json(formattedData);
   } catch (err) {
-    console.error('Server error calling Anthropic:', err);
-    return res.status(500).json({ error: 'Server error while contacting Anthropic API.' });
+    console.error('Server error calling Gemini:', err);
+    return res.status(500).json({ error: 'Server error while contacting Gemini API.' });
   }
 }
