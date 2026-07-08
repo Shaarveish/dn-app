@@ -1,5 +1,6 @@
 // This runs on the server (Vercel), never in the browser.
-// Fixed base64 text parsing and added safe fallback formatting for Gemini 1.5 Flash.
+// Uses native Node.js HTTPS module to guarantee connection without fetch failures!
+import https from 'https';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -17,51 +18,65 @@ export default async function handler(req, res) {
   }
 
   try {
-    // CRITICAL FIX 1: Strip out data URI scheme if present (e.g., "data:image/jpeg;base64,")
+    // Strip out data URI scheme if present
     const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
 
-    // Using stable v1 API endpoint
-    const geminiUrl = `https://googleapis.com{apiKey}`;
+    const postData = JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType: 'image/jpeg',
+                data: cleanBase64,
+              },
+            },
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ],
+    });
 
-    const geminiResponse = await fetch(geminiUrl, {
+    // Native HTTPS request configuration to prevent environment fetch errors
+    const options = {
+      hostname: '://googleapis.com',
+      path: `/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData),
       },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: 'image/jpeg',
-                  data: cleanBase64,
-                },
-              },
-              {
-                text: prompt,
-              },
-            ],
-          },
-        ],
-      }),
+    };
+
+    // Wrap the native request execution in a promise structure
+    const geminiBody = await new Promise((resolve, reject) => {
+      const request = https.request(options, (response) => {
+        let incomingChunks = '';
+        response.on('data', (chunk) => { incomingChunks += chunk; });
+        response.on('end', () => {
+          if (response.statusCode >= 400) {
+            reject(new Error(`API responded with code ${response.statusCode}: ${incomingChunks}`));
+          } else {
+            resolve(JSON.parse(incomingChunks));
+          }
+        });
+      });
+
+      request.on('error', (err) => { reject(err); });
+      request.write(postData);
+      request.end();
     });
 
-    const data = await geminiResponse.json();
-
-    if (!geminiResponse.ok) {
-      console.error('Gemini API explicit error:', data);
-      return res.status(geminiResponse.status).json({ error: data.error?.message || 'Gemini API request failed.' });
-    }
-
-    let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    let aiText = geminiBody.candidates?.[0]?.content?.parts?.[0]?.text || '';
     
     // Strip markdown formatting if Gemini includes it
     if (aiText.includes('```')) {
       aiText = aiText.replace(/```json/gi, '').replace(/```/g, '').trim();
     }
 
-    // CRITICAL FIX 2: Emulate Claude's message structure exactly for your frontend layout parser
+    // Emulate Claude's message structure exactly for your frontend layout parser
     const formattedData = {
       content: [
         {
@@ -73,7 +88,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json(formattedData);
   } catch (err) {
-    console.error('Server error handling Gemini execution:', err);
-    return res.status(500).json({ error: `Server error: ${err.message || 'Unknown processing error'}` });
+    console.error('Server execution fallback failure:', err);
+    return res.status(500).json({ error: `Server error: ${err.message || 'Processing failure'}` });
   }
 }
