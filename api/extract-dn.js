@@ -1,9 +1,9 @@
 // This runs on the server (Vercel), never in the browser.
-// Uses native Node.js HTTPS to run fully inside Google's free tier.
-// Emulates Claude's layout structure to automatically fill out input boxes.
-import https from 'https';
+// It keeps your GEMINI_API_KEY secret while letting the app
+// send it a photo and get back the extracted DN fields.
+// Uses Google's Gemini API (free tier: gemini-2.5-flash-lite).
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -19,74 +19,39 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Strip data URI scheme prefix out of base64 data string
-    const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
-
-    // Inject strict instruction into the existing frontend Claude prompt to guarantee valid json output
-    const combinedPrompt = `${prompt}\n\nIMPORTANT: Return your response strictly as a raw JSON block object matching the requested fields. Do not warp your response inside markdown backticks or triple tick blocks.`;
-
-    const postData = JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-            { text: combinedPrompt }
-          ]
-        }
-      ],
-      generationConfig: {
-        responseMimeType: "application/json" // Hard-forces Gemini to reply in native JSON data structures
+    const geminiResponse = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey
+        },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: 'image/jpeg', data: base64Image } }
+            ]
+          }]
+        })
       }
-    });
+    );
 
-    const options = {
-      hostname: 'generativelanguage.googleapis.com',
-      path: `/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData),
-      },
-    };
+    const data = await geminiResponse.json();
 
-    const geminiBody = await new Promise((resolve, reject) => {
-      const request = https.request(options, (response) => {
-        let incomingChunks = '';
-        response.on('data', (chunk) => { incomingChunks += chunk; });
-        response.on('end', () => {
-          if (response.statusCode >= 400) {
-            reject(new Error(`API Error ${response.statusCode}: ${incomingChunks}`));
-          } else {
-            resolve(JSON.parse(incomingChunks));
-          }
-        });
-      });
-      request.on('error', (err) => { reject(err); });
-      request.write(postData);
-      request.end();
-    });
-
-    let aiText = geminiBody.candidates?.?.content?.parts?.?.text || '{}';
-    
-    // Clean up residual backticks or markdown strings if any are present
-    if (aiText.includes('```')) {
-      aiText = aiText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    if (!geminiResponse.ok) {
+      console.error('Gemini API error:', data);
+      return res.status(geminiResponse.status).json({ error: data.error?.message || 'Gemini API request failed.' });
     }
 
-    // CRITICAL: Format the content field to mirror Claude's message shape structure exactly
-    const formattedData = {
-      content: [
-        {
-          type: 'text',
-          text: aiText
-        }
-      ]
-    };
+    const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('\n') || '';
 
-    return res.status(200).json(formattedData);
+    // Normalize to the same shape the app expects: { content: [{ text }] }
+    return res.status(200).json({ content: [{ text }] });
   } catch (err) {
-    console.error('Gemini extraction processing layout crash:', err);
-    return res.status(500).json({ error: `Server error: ${err.message || 'Failure'}` });
+    console.error('Server error calling Gemini:', err);
+    return res.status(500).json({ error: 'Server error while contacting Gemini API.' });
   }
 }
-
