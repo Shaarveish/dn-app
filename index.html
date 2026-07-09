@@ -214,7 +214,7 @@
       <div class="bulk-header">
         <div>
           <div class="bulk-title">Bulk Import — Read a Month's DN Photos</div>
-          <div class="bulk-sub">Select all the DN photos for a month (e.g. "JULY 2026" folder). The app will read each photo and pre-fill a DN entry automatically. Always double-check before saving — handwriting can be misread.</div>
+          <div class="bulk-sub">Select up to 5 DN photos at a time. The app will read each photo and pre-fill a DN entry automatically. Always double-check before saving — handwriting can be misread.</div>
         </div>
       </div>
       <div class="bulk-controls">
@@ -686,10 +686,23 @@ function escapeHtml(str){
 let bulkFileList = [];
 let reviewQueue = []; // {tempId, fileName, status:'ok'|'fail', data:{...allFieldIds}, error}
 
+const MAX_PHOTOS_PER_UPLOAD = 5;
+
 function handleBulkFileSelect(fileListInput){
-  const files = Array.from(fileListInput).filter(f => f.type.startsWith('image/'));
+  let files = Array.from(fileListInput).filter(f => f.type.startsWith('image/'));
+  let trimmed = false;
+  if(files.length > MAX_PHOTOS_PER_UPLOAD){
+    files = files.slice(0, MAX_PHOTOS_PER_UPLOAD);
+    trimmed = true;
+  }
   bulkFileList = files;
-  $('bulkFileCount').textContent = files.length ? `${files.length} photo(s) selected` : '';
+  if(files.length === 0){
+    $('bulkFileCount').textContent = '';
+  } else if(trimmed){
+    $('bulkFileCount').textContent = `${files.length} photo(s) selected (max ${MAX_PHOTOS_PER_UPLOAD} per upload \u2014 extra photos were not included, please upload in batches of ${MAX_PHOTOS_PER_UPLOAD})`;
+  } else {
+    $('bulkFileCount').textContent = `${files.length} photo(s) selected`;
+  }
   $('bulkProcessBtn').disabled = files.length === 0;
 }
 $('bulkFiles').addEventListener('change', (e) => handleBulkFileSelect(e.target.files));
@@ -930,3 +943,4 @@ loadAll();
 </script>
 </body>
 </html>
+
